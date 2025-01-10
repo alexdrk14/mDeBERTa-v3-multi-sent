@@ -1,6 +1,7 @@
 import torch, os
 import numpy as np
-import evaluate
+import evaluate, wandb
+from datetime import datetime
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from transformers import TrainingArguments, Trainer
 import pandas as pd
@@ -22,6 +23,8 @@ model.config.classifier_dropout = 0.2  # Set classifier dropout rate
 
 tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
 
+run = wandb.init(project="DeBERTa-v3-Sentiment", name=datetime.now().strftime('%m/%d/%Y'))
+
 metric = evaluate.load("accuracy")
 
 def tokenize_function(examples):
@@ -41,9 +44,17 @@ def compute_metrics(eval_pred):
         "f1": f1,
     }
 """Load Training dataset portions and cast them into dataset format"""
-train_data = Dataset.from_pandas(pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')]).sample(frac=1).reset_index(drop=True))
+train_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')])
+#Drop duplicated into two stages 1st: drop 1 of the duplicates where text and label is similar. 2nd drop any instances with identical text but different labels.
+train_data.drop_duplicates(keep='first', inplace=True) #Keep only single sample from similar samples with identical targets.
+train_data = train_data.iloc[train_data['text'].drop_duplicates(keep=False).index] #Remove any identical samples with different targets
+train_data = Dataset.from_pandas(train_data.sample(frac=1).reset_index(drop=True))
 """Similarly read and cast validation portions"""
-val_data = Dataset.from_pandas(pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ]))
+val_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ])
+#Drop duplicated texts
+val_data.drop_duplicates(keep='first', inplace=True)
+val_data = Dataset.from_pandas(val_data.iloc[val_data['text'].drop_duplicates(keep=False).index])
+
 
 tokenized_train_datasets = train_data.map(tokenize_function, batched=True)
 tokenized_val_datasets = val_data.map(tokenize_function, batched=True)
@@ -59,7 +70,7 @@ training_args = TrainingArguments(
     max_grad_norm=1.0, # clipping
     lr_scheduler_type='linear',
     per_device_train_batch_size=32,
-    gradient_accumulation_steps=1, #the deafult gradient accumulation step is 2 with batch size of 32, making gradient update after 64 samples
+    gradient_accumulation_steps=1, #the default gradient accumulation step is 2 with batch size of 16, making gradient update after 64 samples
     warmup_ratio=0.06,
     fp16=False,
     output_dir="./results",

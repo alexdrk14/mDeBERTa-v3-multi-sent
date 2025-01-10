@@ -30,7 +30,7 @@ GPT_known = {'sst2': (0.00, 0.931),
 DATASETS= {'sst2': 'sst2_val.tsv',
            'sent-eng': 'sent-english-gpt.csv',
            'sent-twi': 'sent-twi-gpt.csv',
-           'mixed': 'MixedVal_val.tsv',
+           'mixed': 'MixedVal.tsv',#'MixedVal_val.tsv',
            'absc-laptop': 'ABSC-laptop-trial_test.tsv',
            'absc-rest' : 'ABSC-restaurants-trial_test.tsv',
            'stanford': 'stanfordnlp_test.tsv',
@@ -89,9 +89,9 @@ print(f'model loaded to {device}')
 #val_data = Dataset.from_pandas(pd.read_csv(f'{DATA_PATH}sst2_test.tsv', header=0, sep='\t'))
 #y_true = val_data['labels']
 task = "sentiment-analysis"#"text-classification"#"text-classification"#"zero-shot-classification"#"text-classification"
-model_id = "./results/checkpoint-7365/"#"./results/checkpoint-25920/"#"MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"#"mrm8488/deberta-v3-ft-financial-news-sentiment-analysis"
+model_id = "./results/checkpoint-650440/"#"./results/checkpoint-25920/"#"MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7"#"mrm8488/deberta-v3-ft-financial-news-sentiment-analysis"
 
-classifier = pipeline(task, model_id, tokenizer=tokenizer, device=device, batch_size=128)
+classifier = pipeline(task, model_id, tokenizer=tokenizer, device=device, batch_size=64)
 
 for dname in  DATASETS:
     get_sentiment_perf(dname, classifier)
