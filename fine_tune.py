@@ -9,7 +9,8 @@ import pandas as pd
 from datasets import Dataset, DatasetDict
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
-DATA_PATH = './datasets/'
+DATA_PATH = '/shevtsov/sent_datasets/'#'./datasets/'
+OUT_PATH = '/shevtsov/sent_results'
 
 id2label = {0: "NEGATIVE", 1: "POSITIVE", 2: 'NEUTRAL'}
 label2id = {"NEGATIVE": 0, "POSITIVE": 1, 'NEUTRAL': 2}
@@ -73,7 +74,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=1, #the default gradient accumulation step is 2 with batch size of 16, making gradient update after 64 samples
     warmup_ratio=0.06,
     fp16=False,
-    output_dir="./results",
+    output_dir=OUT_PATH,#"./results",
     eval_strategy="epoch",
     logging_strategy="epoch",
     save_strategy="epoch",
