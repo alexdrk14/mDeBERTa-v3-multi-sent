@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import datetime
 import torch, os, evaluate, wandb
 
-from datasets import Dataset, load_dataset, concatenate_datasets
+from datasets import Dataset, load_dataset, concatenate_datasets, Features, ClassLabel, Value
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
@@ -18,6 +18,11 @@ label2id = {"negative": 0, "neutral": 1, 'positive': 2}
 dataset_names  = ["tyqiangz/multilingual-sentiments", "cardiffnlp/tweet_sentiment_multilingual" ]
 device = torch.device('cuda:2') if torch.cuda.is_available() else torch.device('cpu')
 #torch.set_default_device('cuda')
+
+target_features = Features({
+        'text': Value('string'),
+        'labels': ClassLabel(names=list(id2label.values()))
+        })
 
 model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-v3-base",
         num_labels=3, id2label=id2label, label2id=label2id)
@@ -68,7 +73,7 @@ def compute_metrics(eval_pred):
 
 def label_standarization(sample, mapper):
     """Convert label to integer"""
-    sample['labels'] = mapper[sample['labels'].lower()]
+    sample['label'] = mapper[sample['label']]
     return sample
 
 def get_dataset_split(split):
@@ -81,9 +86,16 @@ def get_dataset_split(split):
         if len(to_drop) != 0:
             data = data.remove_columns(to_drop)
         """Create translator (aka mapper) that correspond dataset labels to the standard label type."""
-        mapper = {id: label2id[label] for label, id in zip(data.features['label'].names, label2id.values())}
-        data = data.map(lambda x:label_standarization(x, mapper), batched=False)
+        mapper = {id: label2id[label.lower()] for label, id in zip(data.features['label'].names, label2id.values())}
+        #data = data.map(lambda x:label_standarization(x, mapper), batched=False)
+        # Convert dataset2 to use the same schema
+        data = Dataset.from_dict({
+                                  'text': data['text'],
+                                  'labels': [mapper[label] for label in data['label']]
+                                 }, features=target_features)
+
         data_split.append(data)
+
     return concatenate_datasets(data_split)
 
 
