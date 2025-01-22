@@ -1,13 +1,13 @@
-import torch, os
-import numpy as np
-import evaluate, wandb
-from datetime import datetime
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from transformers import TrainingArguments, Trainer
-import pandas as pd
 
-from datasets import Dataset, DatasetDict
+import numpy as np
+import pandas as pd
+from datetime import datetime
+import torch, os, evaluate, wandb
+
+from datasets import Dataset
+from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
 
 DATA_PATH = '/shevtsov/sent_datasets/'#'./datasets/'
 OUT_PATH = '/shevtsov/sent_results'
@@ -28,6 +28,26 @@ run = wandb.init(project="DeBERTa-v3-Sentiment", name=datetime.now().strftime('%
 
 metric = evaluate.load("accuracy")
 
+"""Custom trainer in order to take into the consideration during the training class imbalance between pos/neg/neu samples."""
+class CustomTrainer(Trainer):
+    def __init__(self, *args, tensor_class_w=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        #store the class weights
+        self.tensor_class_w = tensor_class_w
+
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.pop("labels")
+        # forward pass
+        outputs = model(**inputs)
+        logits = outputs.logits
+
+        # compute custom loss (suppose one has 2 labels with different weights)
+        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+
+        return (loss, outputs) if return_outputs else loss
+
 def tokenize_function(examples):
     return tokenizer(examples["text"], padding="max_length", truncation=True, max_length=512, return_tensors="pt")
 
@@ -44,21 +64,29 @@ def compute_metrics(eval_pred):
         "recall": recall,
         "f1": f1,
     }
-"""Load Training dataset portions and cast them into dataset format"""
-train_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')])
-#Drop duplicated into two stages 1st: drop 1 of the duplicates where text and label is similar. 2nd drop any instances with identical text but different labels.
-train_data.drop_duplicates(keep='first', inplace=True) #Keep only single sample from similar samples with identical targets.
-train_data = train_data.iloc[train_data['text'].drop_duplicates(keep=False).index] #Remove any identical samples with different targets
-train_data = Dataset.from_pandas(train_data.sample(frac=1).reset_index(drop=True))
-"""Similarly read and cast validation portions"""
-val_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ])
-#Drop duplicated texts
-val_data.drop_duplicates(keep='first', inplace=True)
-val_data = Dataset.from_pandas(val_data.iloc[val_data['text'].drop_duplicates(keep=False).index])
 
+def data_loader():
+    """Load Training dataset portions and cast them into dataset format"""
+    train_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')])
 
+    """Drop duplicated into two stages 1st: drop 1 of the duplicates where text and label is similar. 
+       2nd drop any instances with identical text but different labels."""
+    train_data.drop_duplicates(keep='first', inplace=True) #Keep only single sample from similar samples with identical targets.
+    train_data = train_data.iloc[train_data['text'].drop_duplicates(keep=False).index] #Remove any identical samples with different targets
+    train_data = Dataset.from_pandas(train_data.sample(frac=1).reset_index(drop=True))
+    """Similarly read and cast validation portions"""
+    val_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ])
+
+    """Drop duplicated texts"""
+    val_data.drop_duplicates(keep='first', inplace=True)
+    val_data = Dataset.from_pandas(val_data.iloc[val_data['text'].drop_duplicates(keep=False).index])
+
+    return train_data, val_data
+
+train_data, val_data = data_loader()
 tokenized_train_datasets = train_data.map(tokenize_function, batched=True)
 tokenized_val_datasets = val_data.map(tokenize_function, batched=True)
+
 
 training_args = TrainingArguments(
     num_train_epochs=5,
@@ -71,7 +99,7 @@ training_args = TrainingArguments(
     max_grad_norm=1.0, # clipping
     lr_scheduler_type='linear',
     per_device_train_batch_size=32,
-    gradient_accumulation_steps=1, #the default gradient accumulation step is 2 with batch size of 16, making gradient update after 64 samples
+    gradient_accumulation_steps=1,
     warmup_ratio=0.06,
     fp16=False,
     output_dir=OUT_PATH,#"./results",
@@ -82,11 +110,14 @@ training_args = TrainingArguments(
     save_total_limit=3,
 )
 
-trainer = Trainer(
+trainer = CustomTrainer(
     model=model,
     args=training_args,
     train_dataset=tokenized_train_datasets,
     eval_dataset=tokenized_val_datasets,
     compute_metrics=compute_metrics,
+    tensor_class_w=torch.tensor(compute_class_weight(class_weight='balanced',
+                                                     classes=np.unique(train_data['labels']),
+                                                     y=train_data['labels']), device='cuda')
 )
 trainer.train()
