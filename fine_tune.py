@@ -36,14 +36,14 @@ class CustomTrainer(Trainer):
         self.tensor_class_w = tensor_class_w
 
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         labels = inputs.pop("labels")
         # forward pass
         outputs = model(**inputs)
         logits = outputs.logits
 
         # compute custom loss (suppose one has 2 labels with different weights)
-        loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights)
+        loss_fct = torch.nn.CrossEntropyLoss(weight=self.tensor_class_w)
         loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
 
         return (loss, outputs) if return_outputs else loss
