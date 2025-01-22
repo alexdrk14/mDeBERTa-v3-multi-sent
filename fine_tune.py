@@ -4,17 +4,18 @@ import pandas as pd
 from datetime import datetime
 import torch, os, evaluate, wandb
 
-from datasets import Dataset
+from datasets import Dataset, load_dataset, concatenate_datasets
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
 
-DATA_PATH = '/shevtsov/sent_datasets/'#'./datasets/'
+DATA_PATH = '/shevtsov/sent_datasets/'
 OUT_PATH = '/shevtsov/sent_results'
 
-id2label = {0: "NEGATIVE", 1: "POSITIVE", 2: 'NEUTRAL'}
-label2id = {"NEGATIVE": 0, "POSITIVE": 1, 'NEUTRAL': 2}
+id2label = {0: "negative", 1: "neutral", 2: 'positive'}
+label2id = {"negative": 0, "neutral": 1, 'positive': 2}
 
+dataset_names  = ["tyqiangz/multilingual-sentiments", "cardiffnlp/tweet_sentiment_multilingual" ]
 device = torch.device('cuda:2') if torch.cuda.is_available() else torch.device('cpu')
 #torch.set_default_device('cuda')
 
@@ -65,21 +66,45 @@ def compute_metrics(eval_pred):
         "f1": f1,
     }
 
+def label_standarization(sample, mapper):
+    """Convert label to integer"""
+    sample['labels'] = mapper[sample['labels'].lower()]
+    return sample
+
+def get_dataset_split(split):
+    assert split in ['train', 'validation']
+    data_split = []
+    for dname in dataset_names:
+        data = load_dataset(dname, 'all', split=split)
+        """Remove unnecessary columns from the dataset. Only text and label columns are needed."""
+        to_drop = list(set(data.features.keys()) - set(['text', 'label']))
+        if len(to_drop) != 0:
+            data = data.remove_columns(to_drop)
+        """Create translator (aka mapper) that correspond dataset labels to the standard label type."""
+        mapper = {id: label2id[label] for label, id in zip(data.features['label'].names, label2id.values())}
+        data = data.map(lambda x:label_standarization(x, mapper), batched=False)
+        data_split.append(data)
+    return concatenate_datasets(data_split)
+
+
+
 def data_loader():
     """Load Training dataset portions and cast them into dataset format"""
-    train_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')])
+    #train_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')])
+    train_data = get_dataset_split('train')
+    val_data = get_dataset_split('validation')
 
     """Drop duplicated into two stages 1st: drop 1 of the duplicates where text and label is similar. 
        2nd drop any instances with identical text but different labels."""
-    train_data.drop_duplicates(keep='first', inplace=True) #Keep only single sample from similar samples with identical targets.
-    train_data = train_data.iloc[train_data['text'].drop_duplicates(keep=False).index] #Remove any identical samples with different targets
-    train_data = Dataset.from_pandas(train_data.sample(frac=1).reset_index(drop=True))
+    #train_data.drop_duplicates(keep='first', inplace=True) #Keep only single sample from similar samples with identical targets.
+    #train_data = train_data.iloc[train_data['text'].drop_duplicates(keep=False).index] #Remove any identical samples with different targets
+    #train_data = Dataset.from_pandas(train_data.sample(frac=1).reset_index(drop=True))
     """Similarly read and cast validation portions"""
-    val_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ])
+    #val_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ])
 
-    """Drop duplicated texts"""
-    val_data.drop_duplicates(keep='first', inplace=True)
-    val_data = Dataset.from_pandas(val_data.iloc[val_data['text'].drop_duplicates(keep=False).index])
+    "k""Drop duplicated texts"""
+    #val_data.drop_duplicates(keep='first', inplace=True)
+    #val_data = Dataset.from_pandas(val_data.iloc[val_data['text'].drop_duplicates(keep=False).index])
 
     return train_data, val_data
 
@@ -102,7 +127,7 @@ training_args = TrainingArguments(
     gradient_accumulation_steps=1,
     warmup_ratio=0.06,
     fp16=False,
-    output_dir=OUT_PATH,#"./results",
+    output_dir=OUT_PATH,
     eval_strategy="epoch",
     logging_strategy="epoch",
     save_strategy="epoch",
