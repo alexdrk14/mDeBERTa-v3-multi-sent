@@ -49,6 +49,27 @@ In order to train the model the following dataset where used:
 
 F1 score is measured with macro average computation parameter. 
 
+# Execution 
+
+Create python virtual enviroment and install the requirement libraries:
+```bash
+python3.12 -m venv pyvenv
+source pyvenv/bin/activate # activates venv with installed requirements 
+python3.12 -m pip install -r requirements.txt
+```
+
+In case of single GPU or CPU training execute:
+```bash
+source pyvenv/bin/activate # activates venv with installed requirements 
+python3 fine_tune.py 
+```
+In case of multiple GPUs and DDP training execute:
+```bash
+source pyvenv/bin/activate # activates venv with installed requirements 
+python -m torch.distributed.launch --nproc_per_node XX fine_tune.py # Where XX is number of available GPUs instances
+```
+
+Execution will report to the [wandb](https://wandb.ai) account during the model fine-tuning at each epoch.
 
 # HuggingFace model checkpoints
 [alexander-sh/mDeBERTa-v3-multi-sent](https://huggingface.co/alexander-sh/mDeBERTa-v3-multi-sent)
