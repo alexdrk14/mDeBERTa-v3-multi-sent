@@ -1,9 +1,10 @@
-
 import numpy as np
 import pandas as pd
 import argparse
+from copy import deepcopy
 from datetime import datetime
 import torch, os, evaluate, wandb
+from extra import *
 
 
 from datasets import Dataset, load_dataset, concatenate_datasets, Features, ClassLabel, Value
@@ -11,41 +12,13 @@ from sklearn.utils.class_weight import compute_class_weight
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer, get_cosine_schedule_with_warmup, TrainerCallback
 
-DATA_PATH = '/shevtsov/sent_datasets/'
-OUT_PATH = '/shevtsov/sent_results'
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-id2label = {0: "negative", 1: "neutral", 2: 'positive'}
-label2id = {"negative": 0, "neutral": 1, 'positive': 2}
+target_features = None
 
-dataset_names = ["tyqiangz/multilingual-sentiments", #multi
-                 "cardiffnlp/tweet_sentiment_multilingual", #multi
-                 "mteb/tweet_sentiment_multilingual", #multi
-                 #"stanfordnlp/sentiment140", #eng
-                 "Sp1786/multiclass-sentiment-analysis-dataset", #eng
-                 ]
+model = None
 
-Default_Class_Names = {#"stanfordnlp/sentiment140": ['positive', 'neutral', 'negative'],# according to https://huggingface.co/datasets/stanfordnlp/sentiment140/blob/main/sentiment140.py line 52.}
-                       "Sp1786/multiclass-sentiment-analysis-dataset": ['negative', 'neutral', 'positive'], #according to https://huggingface.co/datasets/Sp1786/multiclass-sentiment-analysis-dataset
-                       "mteb/tweet_sentiment_multilingual": ['negative', 'neutral', 'positive'] # https://huggingface.co/datasets/mteb/tweet_sentiment_multilingual
-                       }
-device = torch.device('cuda:2') if torch.cuda.is_available() else torch.device('cpu')
-#torch.set_default_device('cuda')
-
-target_features = Features({
-        'text': Value('string'),
-        'labels': ClassLabel(names=list(id2label.values()))
-        })
-
-model = AutoModelForSequenceClassification.from_pretrained("microsoft/deberta-v3-base",
-        num_labels=3, id2label=id2label, label2id=label2id)
-
-model.config.classifier_dropout = 0.3  # Set classifier dropout rate
-model.config.hidden_dropout_prob = 0.2  # Add hidden layer dropout
-model.config.attention_probs_dropout_prob = 0.2  # Add attention dropout
-
-tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
-
-
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 
 metric = evaluate.load("accuracy")
 
@@ -57,28 +30,45 @@ class CustomTrainer(Trainer):
         self.tensor_class_w = tensor_class_w.float() if tensor_class_w is not None else None
         self.gamma = gamma
 
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         labels = inputs.pop("labels")
+        labels = labels.to(model.device)
         # forward pass
         outputs = model(**inputs)
         logits = outputs.logits.float()
-
+        logits = logits.to(model.device)
         # compute custom loss (suppose one has 2 labels with different weights)
-        loss_fct = torch.nn.CrossEntropyLoss(weight=self.tensor_class_w, reduction='none')
-        loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
-        pt = torch.exp(-loss)
-        focal_loss = ((1-pt)**self.gamma*loss).mean()
-        return (focal_loss, outputs) if return_outputs else focal_loss
+        loss = torch.nn.CrossEntropyLoss(weight=self.tensor_class_w, reduction='none')
+        loss = loss.to(model.device)
+        if self.tensor_class_w is not None:
+            """In case of imbalance data compute focal loss"""
+            loss = loss(logits.view(-1, self.model.config.num_labels), labels.view(-1))
+            pt = torch.exp(-loss)
+            loss = ((1-pt)**self.gamma*loss).mean()
+        return (loss, outputs) if return_outputs else loss
 
-def tokenize_function(examples):
+class CustomCallback(TrainerCallback):
+    
+    def __init__(self, trainer) -> None:
+        super().__init__()
+        self._trainer = trainer
+    
+    def on_epoch_end(self, args, state, control, **kwargs):
+        if control.should_evaluate:
+            control_copy = deepcopy(control)
+            self._trainer.evaluate(eval_dataset=self._trainer.train_dataset, metric_key_prefix="train")
+            return control_copy
+
+def tokenize_function_sent(examples):
     return tokenizer(examples["text"], padding="max_length", truncation=True, max_length=512, return_tensors="pt")
+
+def tokenize_function_xnli(examples):
+    return tokenizer(examples["premise"], examples["hypothesis"], truncation=True, padding="max_length", max_length=512)
+
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=-1)
-    #accuracy = metric.compute(predictions=predictions, references=labels)
-    #return metric.compute(predictions=predictions, references=labels)
     accuracy = accuracy_score(labels, predictions)
     precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average="weighted")
     return {
@@ -131,96 +121,101 @@ def get_dataset_split(split):
             data = data.remove_columns(to_drop)
         """Create translator (aka mapper) that correspond dataset labels to the standard label type."""
         mapper = {id: label2id[label.lower()] for label, id in zip(data.features['label'].names, label2id.values())}
-        #data = data.map(lambda x:label_standarization(x, mapper), batched=False)
-        # Convert dataset2 to use the same schema
         data = Dataset.from_dict({
                                   'text': data['text'],
                                   'labels': [mapper[label] for label in data['label']]
                                  }, features=target_features)
 
         data_split.append(data)
-
-    return concatenate_datasets(data_split)
+     
+    for datasetname in local_datasets:
+        if split == 'validation':
+            datasetname = datasetname.replace('train', 'val')
+        df = pd.read_csv(datasetname, header=0, sep='\t')
+        df['labels'] = [0 if item == 0 else 2 for item in df['labels']]
+        df = df.dropna()
+        df = Dataset.from_dict({
+                                   'text': df['text'],
+                                   'labels': df['labels'],
+                                }, features=target_features)
+        
+        data_split.append(df)
+    
+    return concatenate_datasets(data_split).shuffle(seed=42)
 
 
 
 def data_loader():
+    class_weights = None
+
     """Load Training dataset portions and cast them into dataset format"""
-    #train_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_train.tsv')])
     train_data = get_dataset_split('train')
-    val_data = get_dataset_split('validation')
+    class_weights = torch.tensor(
+                        compute_class_weight(
+                                    class_weight='balanced',
+                                    classes=np.unique(train_data['labels']),
+                                    y=train_data['labels']),
+                        device='cuda')
+    train_data = train_data.map(tokenize_function_sent, batched=True)
+    val_data = get_dataset_split('validation').map(tokenize_function_sent, batched=True)
 
-    """Drop duplicated into two stages 1st: drop 1 of the duplicates where text and label is similar. 
-       2nd drop any instances with identical text but different labels."""
-    #train_data.drop_duplicates(keep='first', inplace=True) #Keep only single sample from similar samples with identical targets.
-    #train_data = train_data.iloc[train_data['text'].drop_duplicates(keep=False).index] #Remove any identical samples with different targets
-    #train_data = Dataset.from_pandas(train_data.sample(frac=1).reset_index(drop=True))
-    """Similarly read and cast validation portions"""
-    #val_data = pd.concat([pd.read_csv(f'{DATA_PATH}{filename}', header=0, sep='\t') for filename in os.listdir(DATA_PATH) if filename.endswith('_val.tsv') ])
+    return train_data, val_data, class_weights
 
-    "k""Drop duplicated texts"""
-    #val_data.drop_duplicates(keep='first', inplace=True)
-    #val_data = Dataset.from_pandas(val_data.iloc[val_data['text'].drop_duplicates(keep=False).index])
-
-    return train_data, val_data
-
-train_data, val_data = data_loader()
-tokenized_train_datasets = train_data.map(tokenize_function, batched=True)
-tokenized_val_datasets = val_data.map(tokenize_function, batched=True)
-
-parser = argparse.ArgumentParser()
-parser.add_argument('--cont', action='store_true')
-args = parser.parse_args()
 if __name__ == '__main__':
-    if args.cont:
-        print('Continue previous fine-tuning ...')
-    # Calculate total training steps
+    train_tokens, val_tokens, class_w = data_loader()
+    
+    print(f'\n\nFine-tuning of the Sentiment task\n\n')
+    target_features = Features({
+        'text': Value('string'),
+        'labels': ClassLabel(names=list(id2label.values()))
+    })
+
+    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME,
+                                                                num_labels=3,
+                                                                id2label=id2label,
+                                                                label2id=label2id)
+
+    model.config.classifier_dropout = 0.3  # Set classifier dropout rate
+    model.config.hidden_dropout_prob = 0.2  # Add hidden layer dropout
+    model.config.attention_probs_dropout_prob = 0.2  # Add attention dropout
+
     training_args = TrainingArguments(
         label_smoothing_factor=0.1,  # Add label smoothing
-        #load_best_model_at_end=True,
         evaluation_strategy="epoch",
         greater_is_better=True,
         # Adding weight decay
         weight_decay=0.02,
-        num_train_epochs=10 if not args.cont else 5 + 5,
-        learning_rate=5e-6,#1e-5,
+        num_train_epochs=10,
+        learning_rate=5e-6,  # 1e-5,
         optim="adamw_torch",
-        adam_beta1 = 0.9,
-        adam_beta2 = 0.999,
-        #weight_decay=0.01,
-        adam_epsilon = 1e-6,
-        max_grad_norm=0.5,#1.0, # clipping
-        #lr_scheduler_type='linear',
+        adam_beta1=0.9,
+        adam_beta2=0.999,
+        adam_epsilon=1e-6,
+        max_grad_norm=0.5,  # 1.0, # clipping
         lr_scheduler_type='cosine',
-        per_device_train_batch_size=24,
-        gradient_accumulation_steps=2,
+        per_device_train_batch_size=48,
+        per_device_eval_batch_size=48,
+        gradient_accumulation_steps=1,
         gradient_checkpointing=True,
         warmup_ratio=0.1,
         fp16=False,
-        output_dir=OUT_PATH,
-        #eval_strategy="epoch",
+        output_dir=OUT_PATH_SENT,
         logging_strategy="epoch",
         save_strategy="epoch",
         metric_for_best_model="f1",
         save_total_limit=3,
-        resume_from_checkpoint=args.cont,
     )
-    if args.cont:
-        checkpoints = [ (checkpoint, int(checkpoint.split('-')[-1])) for checkpoint in os.listdir(OUT_PATH) if checkpoint.startswith('checkpoint-')]
-        checkpoints.sort(key=lambda t: t[1], reverse=True)
-        model = AutoModelForSequenceClassification.from_pretrained(f"{OUT_PATH}/{checkpoints[0][0]}")
 
     trainer = CustomTrainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized_train_datasets,
-        eval_dataset=tokenized_val_datasets,
+        train_dataset=train_tokens,
+        eval_dataset=val_tokens,
         compute_metrics=compute_metrics,
-        tensor_class_w=torch.tensor(compute_class_weight(class_weight='balanced',
-                                                         classes=np.unique(train_data['labels']),
-                                                         y=train_data['labels']), device='cuda'),
+        tensor_class_w=class_w,
         gamma=2.0,
     )
-
-    run = wandb.init(project="DeBERTa-v3-Sentiment", name=datetime.now().strftime('%m/%d/%Y'))
-    trainer.train(resume_from_checkpoint=args.cont)
+    
+    trainer.add_callback(CustomCallback(trainer))
+    run = wandb.init(project="mDeBERTa-v3-Sentiment", name=f'SENT-{datetime.now().strftime("%m/%d/%y")}')
+    trainer.train()

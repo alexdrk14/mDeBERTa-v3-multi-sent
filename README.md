@@ -1,44 +1,58 @@
-Model trained on: sst2, amazon_rev_sample_s1, stanfordnlp_sample_s1
+# Model 
 
-Fine-tuned 1 epoch of the mDeBerta:
-sst2
-Model - F1: 0.9034, Acc: 0.9037
--GPT4 - F1: 0.0000, Acc: 0.9310
--------------------------------
-sent-eng
-Model - F1: 0.3452, Acc: 0.3670
--GPT4 - F1: 0.4611, Acc: 0.5870
--------------------------------
-sent-twi
-Model - F1: 0.2886, Acc: 0.4236
--GPT4 - F1: 0.5049, Acc: 0.5385
--------------------------------
-absc-laptop
-Model - F1: 0.4848, Acc: 0.6513
--GPT4 - F1: 0.6679, Acc: 0.7642
--------------------------------
-absc-rest
-Model - F1: 0.5245, Acc: 0.7531
--GPT4 - F1: 0.7057, Acc: 0.8385
--------------------------------
-Fine-tuned 2 epoch of the mDeBerta:
-sst2
-Model - F1: 0.9105, Acc: 0.9106
--GPT4 - F1: 0.0000, Acc: 0.9310
--------------------------------
-sent-eng
-Model - F1: 0.3507, Acc: 0.3720
--GPT4 - F1: 0.4611, Acc: 0.5870
--------------------------------
-sent-twi
-Model - F1: 0.2831, Acc: 0.4162
--GPT4 - F1: 0.5049, Acc: 0.5385
--------------------------------
-absc-laptop
-Model - F1: 0.4648, Acc: 0.6237
--GPT4 - F1: 0.6679, Acc: 0.7642
--------------------------------
-absc-rest
-Model - F1: 0.5133, Acc: 0.7407
--GPT4 - F1: 0.7057, Acc: 0.8385
--------------------------------
+Multi-language sentiment classification model developed over the multi-language Microsoft [mDeBERTa-v3 base model](https://huggingface.co/microsoft/mdeberta-v3-base). 
+This model where originally trained over [CC100](https://huggingface.co/datasets/statmt/cc100) multi-lingual dataset with more that 100+ languages. In this repo we provide fine-tuned model towards the multi-language sentiment analysis.
+Model where trained on mulitple datasets with multiple languages with additional weights over class (sentiment categories: Negative, Positive, Neutral).
+In order to train the model the following dataset where used:
+ - tyqiangz/multilingual-sentiments
+ - cardiffnlp/tweet_sentiment_multilingual
+ - mteb/tweet_sentiment_multilingual
+ - Sp1786/multiclass-sentiment-analysis-dataset
+ - ABSC amazon review
+ - SST2
+
+# Evaluation and comparison with Vanilla and GPT-4o model:
+
+| Dataset          | Model  | F1     | Accuracy |
+|------------------|--------|--------|----------|
+|                  | Vanilla| 0.0000 | 0.0000   |
+| **sst2**         | Our    | 0.6161 | 0.9231   |
+|                  | GPT-4  | 0.6113 | 0.8605   |
+|---|---|---|---|
+|                  | Vanilla| 0.2453 | 0.5820   |
+| **sent-eng**     | Our    | 0.6289 | 0.6470   |
+|                  | GPT-4  | 0.4611 | 0.5870   |
+|---|---|---|---|
+|                  | Vanilla| 0.0889 | 0.1538   |
+| **sent-twi**     | Our    | 0.3368 | 0.3488   |
+|                  | GPT-4  | 0.5049 | 0.5385   |
+|---|---|---|---|
+|                  | Vanilla| 0.0000 | 0.0000   |
+| **mixed**        | Our    | 0.5644 | 0.7786   |
+|                  | GPT-4  | 0.5336 | 0.6863   |
+|---|---|---|---|
+|                  | Vanilla| 0.1475 | 0.2842   |
+| **absc-laptop**  | Our    | 0.5513 | 0.6682   |
+|                  | GPT-4  | 0.6679 | 0.7642   |
+|---|---|---|---|
+|                  | Vanilla| 0.1045 | 0.1858   |
+| **absc-rest**    | Our    | 0.6149 | 0.7726   |
+|                  | GPT-4  | 0.7057 | 0.8385   |
+|---|---|---|---|
+|                  | Vanilla| 0.1455 | 0.2791   |
+| **stanford**     | Our    | 0.8352 | 0.8353   |
+|                  | GPT-4  | 0.8045 | 0.8032   |
+|---|---|---|---|
+|                  | Vanilla| 0.0000 | 0.0000   |
+| **amazon-var**   | Our    | 0.6432 | 0.9647   |
+|                  | GPT-4  | -----  | 0.9450   |
+
+F1 score is measured with macro average computation parameter. 
+
+
+# HuggingFace model checkpoints
+[alexander-sh/mDeBERTa-v3-multi-sent](https://huggingface.co/alexander-sh/mDeBERTa-v3-multi-sent)
+
+# Author 
+
+Alexander Shevtsov alex.drk14[at]gmail.com

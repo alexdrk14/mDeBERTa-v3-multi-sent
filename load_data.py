@@ -20,6 +20,7 @@ def github_raw(url, filename):
     if filename.endswith('tsv') and 'SST-2-sentiment-analysis' in url:
         df = pd.read_csv(f'{DATA_PATH}{filename}', sep='\t', header=None)
         df.columns = ['labels', 'text']
+        df['labels'] = [0 if item == 0 else 2 for item in df['labels']]
         df.to_csv(f'{DATA_PATH}{filename}', sep='\t', index=False, header=True)
     return True
 
@@ -40,8 +41,7 @@ def parse(data, portion, filename):
     for item in data[portion]:
         text.append(item['text'])
         label = item['sentiment']
-        if label == 4 :
-            label = 1
+        label = int(label/2)
 
         labels.append(label)
     df = pd.DataFrame({'labels': labels, 'text': text})
