@@ -66,7 +66,7 @@ python3 fine_tune.py
 In case of multiple GPUs and DDP training execute:
 ```bash
 source pyvenv/bin/activate # activates venv with installed requirements 
-python -m torch.distributed.launch --nproc_per_node XX fine_tune.py # Where XX is number of available GPUs instances
+python3 -m torch.distributed.launch --nproc_per_node XX fine_tune.py # Where XX is number of available GPUs instances
 ```
 
 Execution will report to the [wandb](https://wandb.ai) account during the model fine-tuning at each epoch.
